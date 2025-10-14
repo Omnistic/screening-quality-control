@@ -1,3 +1,9 @@
+# Configuration file
+config.yaml
+
+# Plotly interactive figures
+*.html
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

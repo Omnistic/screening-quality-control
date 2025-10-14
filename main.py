@@ -1,8 +1,9 @@
-import os, re
+import os, re, yaml
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from bioio import BioImage
+from scipy.ndimage import laplace
 from tqdm import tqdm
 
 CHUNK_SIZE_IN_BYTES = 1000000000
@@ -51,6 +52,7 @@ def get_measurement_from_czi_file(filepath, df):
     well_labels = []
     average_values = []
     standard_deviations = []
+    focus_scores = []
     
     number_of_channels = czi_data.shape[czi_data.dims.order.find('C')]
     number_of_z_slices = czi_data.shape[czi_data.dims.order.find('Z')]
@@ -63,10 +65,12 @@ def get_measurement_from_czi_file(filepath, df):
 
         average_values.extend([float(img.mean())] * number_of_channels * number_of_z_slices)
         standard_deviations.extend([float(img.std())] * number_of_channels * number_of_z_slices)
+        focus_scores.extend([laplace(img).var()] * number_of_channels * number_of_z_slices)
 
     df['Well'] = well_labels
     df['AverageValue'] = average_values
     df['StandardDeviation'] = standard_deviations
+    df['FocusScore'] = focus_scores
 
     return df
 
@@ -78,7 +82,10 @@ def process_metadata(df):
     return df
 
 if __name__ == '__main__':
-    czi_filepath = r'your_file.czi'
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    czi_filepath = config['czi_filepath']
     df_filepath = czi_filepath.replace('.czi', '.json')
 
     # Individual images metadata
@@ -99,28 +106,49 @@ if __name__ == '__main__':
         individual_metadata.to_json(df_filepath, indent=4)
 
     # Visualization
-    fig = go.Figure(data=[go.Scatter3d(
-        x=individual_metadata['Column'],
-        y=individual_metadata['Row'],
-        z=individual_metadata['FocusPosition'],
-        mode='markers',
-        marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
-    )])
-    fig.update_layout(
-        template='plotly_dark',
-        scene = dict(
-            xaxis = dict(
-                title='Column',
-                tickmode='array',
-                tickvals=sorted(individual_metadata['Column'].unique())
-            ),
-            yaxis = dict(
-                title='Row',
-                tickmode='array',
-                tickvals=sorted(individual_metadata['Row'].unique())
-            ),
-            zaxis = dict(title='Focus Position (um)')
-        ),
-    )
+    fig = go.Figure(data=go.Scatter(
+        x=individual_metadata['Well'],
+        y=individual_metadata['FocusScore']
+    ))
     fig.show()
-    fig.write_html('surface.html')
+    # fig = go.Figure(data=[go.Scatter3d(
+    #     x=individual_metadata['StageXPosition'],
+    #     y=individual_metadata['StageYPosition'],
+    #     z=individual_metadata['FocusPosition'],
+    #     mode='markers',
+    #     marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
+    # )])
+    # fig.update_layout(
+    #     template='plotly_dark',
+    #     scene = dict(
+    #         xaxis = dict(title='Stage X Position (um)'),
+    #         yaxis = dict(title='Stage Y Position (um)'),
+    #         zaxis = dict(title='Focus Position (um)')
+    #     ),
+    # )
+    # fig.show()
+    # fig = go.Figure(data=[go.Scatter3d(
+    #     x=individual_metadata['Column'],
+    #     y=individual_metadata['Row'],
+    #     z=individual_metadata['FocusPosition'],
+    #     mode='markers',
+    #     marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
+    # )])
+    # fig.update_layout(
+    #     template='plotly_dark',
+    #     scene = dict(
+    #         xaxis = dict(
+    #             title='Column',
+    #             tickmode='array',
+    #             tickvals=sorted(individual_metadata['Column'].unique())
+    #         ),
+    #         yaxis = dict(
+    #             title='Row',
+    #             tickmode='array',
+    #             tickvals=sorted(individual_metadata['Row'].unique())
+    #         ),
+    #         zaxis = dict(title='Focus Position (um)')
+    #     ),
+    # )
+    # fig.show()
+    # fig.write_html('surface.html')
