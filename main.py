@@ -1,8 +1,10 @@
 import os, re, yaml
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from bioio import BioImage
+from scipy.optimize import curve_fit
 from scipy.ndimage import laplace
 from tqdm import tqdm
 
@@ -81,12 +83,8 @@ def process_metadata(df):
 
     return df
 
-if __name__ == '__main__':
-    with open('config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-
-    czi_filepath = config['czi_filepath']
-    df_filepath = czi_filepath.replace('.czi', '.json')
+def quality_control(filepath):
+    df_filepath = filepath.replace('.czi', '.json')
 
     # Individual images metadata
     if os.path.exists(df_filepath):
@@ -105,50 +103,89 @@ if __name__ == '__main__':
         individual_metadata = process_metadata(individual_metadata)
         individual_metadata.to_json(df_filepath, indent=4)
 
+    popt, pcov = curve_fit(saddle, (individual_metadata['StageXPosition'], individual_metadata['StageYPosition']), individual_metadata['FocusPosition'])
+
     # Visualization
-    fig = go.Figure(data=go.Scatter(
-        x=individual_metadata['Well'],
-        y=individual_metadata['FocusScore']
+    # fig = go.Figure(data=go.Scatter(
+    #     x=individual_metadata['RelativeAcquisitionTimeInSeconds'],
+    #     y=individual_metadata['AverageValue']
+    # ))
+    # fig.show()
+
+    # fig = go.Figure(data=go.Scatter(
+    #     x=individual_metadata['Well'],
+    #     y=individual_metadata['FocusScore']
+    # ))
+    # fig.show()
+    
+    fig = go.Figure(data=[go.Scatter3d(
+        x=individual_metadata['StageXPosition'],
+        y=individual_metadata['StageYPosition'],
+        z=individual_metadata['FocusPosition'],
+        mode='markers',
+        marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
+    )])
+    fig.add_trace(go.Surface(
+        x=np.linspace(individual_metadata['StageXPosition'].min(), individual_metadata['StageXPosition'].max(), 100),
+        y=np.linspace(individual_metadata['StageYPosition'].min(), individual_metadata['StageYPosition'].max(), 100),
+        z=saddle(np.meshgrid(
+            np.linspace(individual_metadata['StageXPosition'].min(), individual_metadata['StageXPosition'].max(), 100),
+            np.linspace(individual_metadata['StageYPosition'].min(), individual_metadata['StageYPosition'].max(), 100)
+        ), *popt).reshape(100, 100),
+        opacity=0.3,
+        colorscale='Pinkyl',
+        showscale=False
     ))
+    fig.update_layout(
+        title='Original Focus Positions and Fitted Plane',
+        template='plotly_dark',
+        scene = dict(
+            xaxis = dict(title='Stage X Position (um)'),
+            yaxis = dict(title='Stage Y Position (um)'),
+            zaxis = dict(title='Focus Position (um)')
+        ),
+    )
+    x_range = individual_metadata['StageXPosition'].max()-individual_metadata['StageXPosition'].min()
+    y_range = individual_metadata['StageYPosition'].max()-individual_metadata['StageYPosition'].min()
+    z_range = individual_metadata['FocusPosition'].max()-individual_metadata['FocusPosition'].min()
+
+    fig['layout']['scene']['aspectmode'] = 'manual'
+    fig['layout']['scene']['aspectratio'] = dict(x=1, y=y_range/x_range, z=100*z_range/x_range)
     fig.show()
-    # fig = go.Figure(data=[go.Scatter3d(
-    #     x=individual_metadata['StageXPosition'],
-    #     y=individual_metadata['StageYPosition'],
-    #     z=individual_metadata['FocusPosition'],
-    #     mode='markers',
-    #     marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
-    # )])
-    # fig.update_layout(
-    #     template='plotly_dark',
-    #     scene = dict(
-    #         xaxis = dict(title='Stage X Position (um)'),
-    #         yaxis = dict(title='Stage Y Position (um)'),
-    #         zaxis = dict(title='Focus Position (um)')
-    #     ),
-    # )
-    # fig.show()
-    # fig = go.Figure(data=[go.Scatter3d(
-    #     x=individual_metadata['Column'],
-    #     y=individual_metadata['Row'],
-    #     z=individual_metadata['FocusPosition'],
-    #     mode='markers',
-    #     marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
-    # )])
-    # fig.update_layout(
-    #     template='plotly_dark',
-    #     scene = dict(
-    #         xaxis = dict(
-    #             title='Column',
-    #             tickmode='array',
-    #             tickvals=sorted(individual_metadata['Column'].unique())
-    #         ),
-    #         yaxis = dict(
-    #             title='Row',
-    #             tickmode='array',
-    #             tickvals=sorted(individual_metadata['Row'].unique())
-    #         ),
-    #         zaxis = dict(title='Focus Position (um)')
-    #     ),
-    # )
-    # fig.show()
-    # fig.write_html('surface.html')
+    fig.write_html(filepath.replace('.czi', '_interactive-original.html'))
+
+    fig = go.Figure(data=[go.Scatter3d(
+        x=individual_metadata['StageXPosition'],
+        y=individual_metadata['StageYPosition'],
+        z=individual_metadata['FocusPosition'] - saddle((individual_metadata['StageXPosition'], individual_metadata['StageYPosition']), *popt),
+        mode='markers',
+        marker=dict(size=3, color=individual_metadata['FocusPosition'], colorscale='Pinkyl')
+    )])
+    fig.update_layout(
+        title='Focus Position Residuals After Removing Fitted Plane',
+        template='plotly_dark',
+        scene = dict(
+            xaxis = dict(title='Stage X Position (um)'),
+            yaxis = dict(title='Stage Y Position (um)'),
+            zaxis = dict(title='Focus Position (um)')
+        ),
+    )
+    fig['layout']['scene']['aspectmode'] = 'manual'
+    fig['layout']['scene']['aspectratio'] = dict(x=1, y=y_range/x_range, z=100*z_range/x_range)
+    fig.show()
+    fig.write_html(filepath.replace('.czi', '_interactive-plane-corrected.html'))
+
+def plane(xy, a, b, c, d):
+    x, y = xy
+    return (-a * x - b * y - d) / c
+
+def saddle(xy, a, b, c, d, e, g, h, i, j):
+    x, y = xy
+    return a*x**2*y**2 + b*x**2*y + c*x*y**2 + d*x**2 + e*y**2 + g*x*y + h*x + i*y + j
+
+if __name__ == '__main__':
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    czi_filepath = config['czi_filepath']
+    quality_control(czi_filepath)
